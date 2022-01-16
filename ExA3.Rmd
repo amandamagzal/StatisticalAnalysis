@@ -1,0 +1,266 @@
+---
+title: "Exercise A3"
+subtitle: "Statistical Analysis of Big Data"
+author: "Amanda Magzal 207608647"
+output: 
+  pdf_document:
+    highlight: pygments
+header-includes:
+  - \usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+  - \usepackage[noend]{algpseudocode}
+  - \usepackage{subfig}
+  - \usepackage{graphicx}
+---
+
+
+```{r include=FALSE}
+library(knitr)
+library(xtable)
+library(latex2exp)
+```
+
+
+### (a) Number of Possible Rules
+
+&nbsp;
+
+Suppose there are $d$ items in a data set. Let $A$ denote the items that form the left hand side of the rule, and $B$ the items that form the right hand side of the rule, creating a rule $A \rightarrow B$.
+
+First, we choose $k < d$ items to form $A$. There are $\binom{d}{k}$ ways to do this. Then, we choose $i$ items from the remaining $d-k$ items to form $B$. There are $\binom{d-k}{i}$ ways to do this.
+
+The total number of rules $R$ is:
+
+$$R = \sum_{k=1}^d \binom{d}{k} \sum_{i=1}^{d-k} \binom{d-k}{i}$$ 
+
+Since
+$$\sum_{i=1}^n \binom{n}{i} = 2^n-1$$
+
+$$R = \sum_{k=1}^d \binom{d}{k} \big(2^{d-k} - 1 \big)$$
+$$= \sum_{k=1}^d \binom{d}{k} 2^{d-k} - \sum_{k=1}^d \binom{d}{k}$$
+$$= \sum_{k=1}^d \binom{d}{k} 2^{d-k} - \big(2^d + 1 \big)$$
+
+Since
+$$(1+x)^d = \sum_{i=1}^d \binom{d}{i} x^{d-i} + x^d$$
+
+substituting $x=2$ leads to:
+$$3^d = \sum_{i=1}^d \binom{d}{i} 2^{d-i} + 2^d$$
+
+Therefore,
+$$R = 3^d - 2^d - \big(2^d + 1 \big)$$
+$$= 3^d - 2^{d+1} + 1 ~\blacksquare$$
+
+
+### (b) Association Rules
+
+&nbsp;
+
+Suppose $X$ is a frequent itemset. All rules generated from $X$ satisfy the support threshold, as each of their support is identical to the support for $X$.
+
+The confidence of a rule $A \rightarrow B$ generated from $X$ is:
+$$c(A \rightarrow B) = \frac{\sigma (X)}{\sigma (A)}$$
+
+Where $\sigma (I)$ denotes the support count of itemset $I$.
+
+&nbsp;
+
+Consider the following transaction data:
+
+```{r echo=FALSE}
+TID <- 1:5
+beer <- c(0, 1, rep(0, 3))
+eggs <- c(rep(1, 4), 0)
+flour <- c(1, 1, 0, 1, 0)
+milk <- c(1, 0, rep(1, 3))
+dat <- as.data.frame(cbind(TID, beer, eggs, flour, milk))
+names(dat) <- c("TID", "Beer", "Eggs", "Flour", "Milk")
+kable(dat, caption = "Transaction Data", align = "ccccc")
+```
+
+In order to find all rules with $minsup = 0.4$, we first find frequent itemsets with support count $\ge 2$.
+
+
+```{r echo=FALSE}
+items1 <- c("{Beer}", "{Eggs}", "{Flour}", "{Milk}")
+count1 <- c(sum(beer), sum(eggs), sum(flour), sum(milk))
+itemsets1 <- as.data.frame(cbind(items1, count1))
+names(itemsets1) <- c("Items", "Support Count")
+print(xtable(itemsets1, align = "ccc"), include.rownames = FALSE, 
+      file = "candidates1.tex", floating = FALSE)
+
+items1 <- c("{Eggs}", "{Flour}", "{Milk}")
+count1 <- c(sum(eggs), sum(flour), sum(milk))
+itemsets1 <- as.data.frame(cbind(items1, count1))
+names(itemsets1) <- c("Items", "Support Count")
+print(xtable(itemsets1, align = "ccc"), include.rownames = FALSE, 
+      file = "frequent1.tex", floating = FALSE)
+```
+
+\begin{table}[h]
+\caption{1-itemsets}
+\centering
+\subfloat[Candidates]{\label{tab:tab2a}\scalebox{1}{\input{./candidates1}}}\quad
+\subfloat[Frequents]{\label{tab:tab2b}\scalebox{1}{\input{./frequent1}}}
+\label{tab:tab2}
+\end{table}
+
+
+
+```{r echo=FALSE}
+items2 <- c("{Eggs, Flour}", "{Eggs, Milk}", "{Flour, Milk}")
+count2 <- c(3, 3, 2)
+itemsets2 <- as.data.frame(cbind(items2, count2))
+names(itemsets2) <- c("Items", "Support Count")
+print(xtable(itemsets2, align = "ccc"), include.rownames = FALSE, 
+      file = "candidates2.tex", floating = FALSE)
+
+items2 <- c("{Eggs, Flour}", "{Eggs, Milk}", "{Flour, Milk}")
+count2 <- c(3, 3, 2)
+itemsets2 <- as.data.frame(cbind(items2, count2))
+names(itemsets2) <- c("Items", "Support Count")
+print(xtable(itemsets2, align = "ccc"), include.rownames = FALSE, 
+      file = "frequent2.tex", floating = FALSE)
+```
+
+\begin{table}[h]
+\caption{2-itemsets}
+\centering
+\subfloat[Candidates]{\label{tab:tab3a}\scalebox{1}{\input{./candidates2}}}\quad
+\subfloat[Frequents]{\label{tab:tab3b}\scalebox{1}{\input{./frequent2}}}
+\label{tab:tab3}
+\end{table}
+
+
+```{r echo=FALSE}
+items3 <- c("{Eggs, Flour, Milk}")
+count3 <- c(2)
+itemsets3 <- as.data.frame(cbind(items3, count3))
+names(itemsets3) <- c("Items", "Support Count")
+print(xtable(itemsets3, align = "ccc"), include.rownames = FALSE, 
+      file = "candidates3.tex", floating = FALSE)
+
+items3 <- c("{Eggs, Flour, Milk}")
+count3 <- c(2)
+itemsets3 <- as.data.frame(cbind(items3, count3))
+names(itemsets3) <- c("Items", "Support Count")
+print(xtable(itemsets3, align = "ccc"), include.rownames = FALSE, 
+      file = "frequent3.tex", floating = FALSE)
+```
+
+\begin{table}[h]
+\caption{3-itemsets}
+\centering
+\subfloat[Candidates]{\label{tab:tab4a}\scalebox{1}{\input{./candidates3}}}\quad
+\subfloat[Frequents]{\label{tab:tab4b}\scalebox{1}{\input{./frequent3}}}
+\label{tab:tab4}
+\end{table}
+
+Next, we generate all possible rules from the frequent itemsets. For each rule we calculate the support and confidence.
+
+For example, for the rule $\text{\{Eggs\}} \rightarrow \text{\{Flour\}}$, the support is
+$$s\big(\text{\{Eggs\}} \rightarrow \text{\{Flour\}} \big) = \frac{\sigma\big(\text{\{Eggs, Flour\}}\big)}{N} = \frac{3}{5} = 0.6$$
+and the confidence is 
+$$c\big(\text{\{Eggs\}} \rightarrow \text{\{Flour\}} \big) = \frac{\sigma\big(\text{\{Eggs, Flour\}}\big)}{\sigma\big(\text{\{Eggs\}}\big)} = \frac{3}{4} = 0.75$$
+
+&nbsp;
+
+Table 5 shows all possible rules with their corresponding support and confidence.
+
+&nbsp;
+
+\begin{table}[h]
+\caption{Possible Association Rules}
+\centering
+\begin{tabular}{lcc}
+\toprule%
+Rule                                                    & Support & Confidence \\\midrule
+$\text{\{Eggs\}}~~\rightarrow ~~\text{\{Flour\}}$       & 0.6     & 0.75       \\
+$\text{\{Flour\}}~\rightarrow ~~\text{\{Eggs\}}~$       & 0.6     & 1          \\
+$\text{\{Eggs\}}~~\rightarrow ~~\text{\{Milk\}}~$       & 0.6     & 0.75       \\
+$\text{\{Milk\}}~~\rightarrow ~~\text{\{Eggs\}}~$       & 0.6     & 0.75       \\
+$\text{\{Flour\}}~\rightarrow ~~\text{\{Milk\}}~$       & 0.4     & 0.67       \\
+$\text{\{Milk\}}~~\rightarrow ~~\text{\{Flour\}}$       & 0.4     & 0.5        \\
+$\text{\{Eggs\}}~~\rightarrow ~~\text{\{Flour, Milk\}}$ & 0.4     & 0.5        \\
+$\text{\{Milk\}}~~\rightarrow ~~\text{\{Eggs, Flour\}}$ & 0.4     & 0.5        \\
+$\text{\{Flour\}}~\rightarrow ~~\text{\{Eggs, Milk\}}~$ & 0.4     & 0.67       \\
+$\text{\{Eggs, Flour\}}~\rightarrow ~~\text{\{Milk\}}~$ & 0.4     & 0.67       \\
+$\text{\{Flour, Milk\}}~\rightarrow ~~\text{\{Eggs\}}~$ & 0.4     & 1          \\
+$\text{\{Eggs, Milk\}}~~\rightarrow ~~\text{\{Flour\}}$ & 0.4     & 0.67       \\\bottomrule
+\end{tabular}
+\end{table}
+
+&nbsp;
+
+All rules satisfy the required $minsup = 0.4$ as they were generated from frequent itemsets. Any rules that do not satisfy $minconf = 0.7$ should be eliminated. The final rules are shown in table 6.
+
+&nbsp;
+
+\begin{table}[h]
+\caption{Association Rules}
+\centering
+\begin{tabular}{lcc}
+\toprule%
+Rule                                                    & Support & Confidence \\\midrule
+$\text{\{Eggs\}}~~\rightarrow ~~\text{\{Flour\}}$       & 0.6     & 0.75       \\
+$\text{\{Flour\}}~\rightarrow ~~\text{\{Eggs\}}~$       & 0.6     & 1          \\
+$\text{\{Eggs\}}~~\rightarrow ~~\text{\{Milk\}}~$       & 0.6     & 0.75       \\
+$\text{\{Milk\}}~~\rightarrow ~~\text{\{Eggs\}}~$       & 0.6     & 0.75       \\
+$\text{\{Flour, Milk\}}~\rightarrow ~~\text{\{Eggs\}}~$ & 0.4     & 1          \\\bottomrule
+\end{tabular}
+\end{table}
+
+\newpage
+
+### (c) Statistical Model
+
+&nbsp;
+
+Let $X=(X_1, X_2, ...,X_k)$ be a $K$-dimensional random vector of possibly correlated Bernoulli random variables (binary outcomes), and let $x=(x_1, x_2, ... x_k)$ be a realization of $X$. The joint probability density is of the form:
+
+$$p(x) = p_{0,0,...0}^{[\prod_{j=1}^k (1-x_j)]} p_{1,0,...,0}^{[x_1\prod_{j=2}^k (1-x_j)]} p_{0,1,...,0}^{[(1-x_1)x_2\prod_{j=3}^k](1-x_j)]}... p_{1,1,...1}^{[\prod_{j=1}^k x_j]}$$
+
+The multivariate Bernoulli can be used to formulate the graph structure of binary variables.
+
+A graph model considers a graph $G=(V,E)$, whose nodes set $V$ represents $k$ random variables $X_1, X_2, ... X_k$ connected or disconnected defined by the undirected edges set $E$. This formulation allows pairwise relationships among the nodes to be described in terms of edges, which in statistics are defined as correlations.
+
+Transactions of market basket data can be considered realizations of a multivariate Bernoulli distribution with $k$ items. The item has value 1 if it was purchased in the transaction, and value 0 otherwise.
+
+Combined with the graph model, the multivariate Bernoulli can be used to estimate pairwise and higher order interctions (i.e. association rules) between the items.
+
+The article used for this question can be found [here](https://arxiv.org/pdf/1206.1874.pdf#:~:text=The%20multivariate%20Bernoulli%20model%20is,to%20k%20orders%20%5B19%5D.).
+
+
+&nbsp;
+
+
+### (d) Pseudo-Code to Calculate Support
+
+\begin{algorithm}[H]
+\DontPrintSemicolon
+\SetAlgoLined
+\SetKwFunction{FMap}{Map}
+\SetKwFunction{FReduce}{Reduce}
+\SetKwProg{Fn}{Function}{:}{}
+\BlankLine
+\Fn{\FMap{id, transaction}}{
+  \For{item i in transaction}{
+        EmitIntermediate($i$, "1")\;
+  }
+}
+\;
+\Fn{\FReduce{item, counts}}{
+  result = 0\;
+  \For{value in counts}{
+        result += $value$\;
+  }
+  \Return{result}
+}
+\caption{Support Count with MapReduce}
+\end{algorithm}
+
+
+
+
+
+
+
+

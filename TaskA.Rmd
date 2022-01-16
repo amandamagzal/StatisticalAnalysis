@@ -1,0 +1,478 @@
+---
+title: "Task A - Recommendation Systems"
+subtitle: "Statistical Analysis of Big Data"
+author: "Amanda Magzal 207608647"
+output: pdf_document
+---
+
+# Project Overview
+
+In this project, I develop a music recommendation system using two engines: (1) Item-based Collaborative Filtering, and (2) Association Rules.
+
+This report includes four main sections. In section 1, I present, summarize and explore the data. In section 2, I present the `R` source code that was used to build the recommendation systems. In section 3, I evaluate and compare the performance (precision) of the two engines, and in section 4, I present the `R` source code that was used to create the Shiny app which can be found [\underline{here}](https://amanda-magzal.shinyapps.io/recsys/).
+
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(pander)
+library(RColorBrewer)
+```
+
+
+# 1. Data Exploration
+
+The data set contains information about users and the artists they have listened to on Last.FM in Germany. Each row represents a user and each column represents an artist.
+
+```{r import data, include=FALSE}
+dat <- read.csv("lastfm-matrix-germany.csv")
+```
+
+```{r dataset head, echo=FALSE}
+pander(head(dat[,c(1:8)]), caption = 'Data set')
+```
+
+The data set includes 1257 users and 285 artists. There are 31 users who did not listen to any artist and therefore will be removed.
+
+In addition, we do not need the users' information. Thus, the `user` column will be dropped.
+
+```{r filtering the dataset, include=FALSE}
+dat <- dat[, 2:ncol(dat)] %>% filter_all(any_vars(. != 0))
+```
+
+The following table and plot present the distribution of the number of artists that each user listened to.
+
+```{r statistics users, echo=FALSE}
+users.sums <- as.data.frame(cbind(c(1:nrow(dat)), rowSums(dat)))
+s <- summary(users.sums[2])
+colnames(s) <- c('Number of Artists')
+pander(s, caption = 'Summary Statistics for Number of Artists')
+```
+
+```{r users histogram, echo=FALSE, message=FALSE, fig.width=5, fig.height=4}
+ggplot(users.sums, aes(x = V2)) +
+  geom_histogram(binwidth = 1, fill = 'aquamarine3') +
+  labs(title = 'Users Rating', x = 'Users', y = 'Number of Liked Artists') +
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5), legend.position = 'none')
+```
+
+&nbsp;
+
+The top artists (highest number of listeners) are presented in the following plot.
+
+```{r top artists barplot, echo=FALSE, fig.height=4, fig.width=5, message=FALSE}
+sums <- as.data.frame(sort(colSums(dat), decreasing = T))
+top.artists <- sums %>% top_n(10)
+top.artists <- cbind(rownames(sums)[1:10], top.artists)
+colnames(top.artists) <- c("V1", "V2")
+
+ggplot(top.artists, aes(x = V1, y = V2, fill = V1)) +
+  geom_bar(stat = 'identity') +
+  labs(title = 'Top 10 Artists', x = 'Artist', y = 'Number of Listeners') +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        plot.title = element_text(hjust = 0.5), legend.position = 'none') +
+  scale_fill_brewer(palette = "Spectral")
+
+```
+
+
+&nbsp;
+
+
+
+# 2. Recommendation Engines
+
+The data is divided into train and test data. The first 859 users are part of the train data, which is used to generate the recommendations. The remaining 357 users are part of the test data, which is later used to evaluate the performance of the engines.
+
+
+```{r train-test}
+train <- dat[1:859, ]
+test <- dat[860:nrow(dat), ]
+```
+
+&nbsp;
+
+
+### 2.1 Item-based Collaborative Filtering
+
+The item-based Collaborative Filtering algorithm recommends items based on how similar they are to other items. Similarity, in this case, is calculated using the *Jaccard index*.
+
+Let $X, Y$ be the sets of the items with a 1 in user profiles $u_a$ and $u_b$, respectively. Hence,
+$$\text{sim}_{Jaccard}(X, Y) = \frac{|X\cap Y|}{|X\cup Y|}$$
+
+In `R`, the *Jaccard index* is calculated using the following function:
+
+```{r Jaccard func}
+Jaccard <- function(X, Y){
+  intersect <- sum(X == Y & X == 1)
+  union <- sum(X) + sum(Y) - intersect
+  return(intersect/union)
+}
+```
+
+&nbsp;
+
+\underline{Generating Recommendations}
+
+&nbsp;
+
+1. Using the `Jaccard` function, calculate the similarity for each pair of artists and store the result.
+
+
+```{r CF similarity}
+dat.similarity  <- matrix(NA, nrow = ncol(dat), ncol = ncol(dat),
+                          dimnames = list(colnames(dat), colnames(dat)))
+
+# Loop through the columns
+for(i in 1:ncol(dat)){
+  # Loop through the columns for each column
+  for(j in 1:ncol(dat)){
+    # Fill in placeholder with Jaccard similarities
+    dat.similarity[i, j] <- Jaccard(as.matrix(dat[i]), as.matrix(dat[j]))
+  }
+}
+
+dat.similarity <- as.data.frame(dat.similarity)
+```
+
+&nbsp;
+
+2. Find the top 5 neighbors for each artist in the following manner:
+  - Loop through all the artists.
+  - Sort the similarity matrix for the artist so that the most similar are first.
+  - Take the top 6 (first will always be the same artist) and put them into the placeholder.
+
+
+```{r CF top-5 neighbours}
+dat.neighbours <- matrix(NA, nrow = ncol(dat.similarity), ncol = 6,
+                         dimnames = list(colnames(dat.similarity)))
+
+for(i in 1:ncol(dat)){
+  dat.neighbours[i,] <- (t(head(n = 6, 
+                                rownames(dat.similarity[order(dat.similarity[,i], 
+                                                              decreasing = TRUE),][i]))))
+}
+
+dat.neighbours <- as.data.frame(dat.neighbours[, 2:ncol(dat.neighbours)])
+
+colnames(dat.neighbours) <- c('Option 1', 'Option 2', 'Option 3', 'Option 4', 'Option 5')
+```
+
+&nbsp;
+
+The recommendations data frame is shown in table 3.
+
+&nbsp;
+
+```{r CF table, echo=FALSE}
+pander(head(dat.neighbours), caption = 'Collaborative Filtering Recommendations',
+       split.table = Inf)
+```
+
+&nbsp;
+
+
+### 2.2 Association Rules
+
+The Association Rules algorithm recommends items based on the *confidence* of the rules generated from the items.
+
+Let $X$ and $Y$ be itemsets (in this case - artists). Hence, the confidence of the rule $X\rightarrow Y$ is
+$$c(X \rightarrow Y) = \frac{\sigma (X \cup Y)}{\sigma (X)}$$
+Where $\sigma (I)$ is the support count of itemset $I$.
+
+&nbsp;
+
+In `R`, the support count of a rule is calculated using the following function:
+
+```{r support func}
+Support <- function(X, Y){
+  return(sum(X == Y & X == 1))
+}
+```
+
+\newpage
+
+\underline{Generating Recommendations}
+
+&nbsp;
+
+1. Calculate the support count for each individual artist.
+
+
+```{r 1-itemsets}
+sup.count <- as.data.frame(colSums(dat))
+colnames(sup.count) <- 'count'
+```
+
+&nbsp;
+
+2. Calculate the confidence for each possible rule and store the result.
+
+
+```{r AR confidence}
+conf <- data.frame(expand.grid(artist1 = colnames(dat), artist2 = colnames(dat), 
+                               confidence = NA))
+
+for(i in 1:nrow(conf)){
+  sup <- Support(as.matrix(dat[conf$artist1[i]]), as.matrix(dat[conf$artist2[i]]))
+  conf$confidence[i] <- sup / sup.count[conf$artist1[i],]
+}
+```
+
+&nbsp;
+
+3. Find the top 5 recommendations for each artist in the following manner:
+  - Select the rules with the highest confidence.
+  - In case of ties (rules with equal confidence), select the first 5 artists.
+
+
+```{r AR top-5 recommendations, warning=FALSE}
+# Sort the dataframe
+dat.top5 <- conf[order(conf$artist1, -conf$confidence),]
+
+  # Filter rows with the same artist
+dat.top5 <- dat.top5 %>% filter(artist1 != artist2) %>% 
+  # Select top 5 recommendations for each artist
+  group_by(artist1) %>% top_n(5, confidence) %>% slice(1:5) %>%
+  # Arrange the dataframe
+  select(-confidence) %>% mutate(V = c('V1', 'V2', 'V3', 'V4', 'V5')) %>%
+  pivot_wider(names_from = V, values_from = artist2)
+
+row.names(dat.top5) <- dat.top5$artist1
+dat.top5 <- dat.top5 %>% ungroup() %>% select(-artist1)
+
+colnames(dat.top5) <- c('Option 1', 'Option 2', 'Option 3', 'Option 4', 'Option 5')
+```
+
+&nbsp;
+
+The recommendations data frame is shown in table 4.
+
+&nbsp;
+
+```{r AR table, echo=FALSE}
+pander(head(dat.top5), caption = 'Association Rules Recommendations',
+       split.table = Inf)
+```
+
+
+
+# 3. Algorithms Evaluation and Comparison
+
+```{r get df, include=FALSE}
+CF.df <- read.csv("CF.csv")
+AR.df <- read.csv("AR.csv")
+```
+
+In this section I perform a simulation to evaluate and compare the performance of the recommendation engines, using the *precision* measure which is calculated as follows:
+$$Precision = \frac{correctly ~recommended ~items}{total ~recommended ~items}$$
+
+&nbsp;
+
+In `R`, the precision measure is calculated using the following function:
+
+```{r precision func}
+Precision <- function(rec, actual){
+  N <- length(rec)
+  d <- 0
+  for(i in 1:5){
+    if(actual[, rec[1, i]] == 1)
+      d <- d + 1
+  }
+  return(d/N)
+}
+```
+
+&nbsp;
+
+For the two developed recommendation engines, I perform the following steps:
+
+- For all users in the test data:
+  1. Sample one artist from those rated by the user.
+  2. Generate the top 5 recommendations for the user given the sampled artist.
+  3. Calculate the precision measure for this user.
+- Calculate *mean precision* over all users in the test data.
+
+
+These steps are implemented using the `Iteration` function below.
+
+
+```{r iteration}
+Iteration <- function(df){
+  
+  p <- numeric()
+  
+  for(i in 1:nrow(test)){
+    
+    # Select a user
+    user <- test[i, ]
+    
+    # Sample 1 artist from those rated by the user
+    x <- user[which(user == 1)]
+    artist <- sample(x, 1)
+    
+    # Generate the top 5 recommendations given an artist
+    rec <- df[df$X == colnames(artist),]
+    
+    # Calculate precision for the recommendation
+    p[i] <- Precision(rec, user)
+    
+  }
+  return(mean(p))
+}
+```
+
+&nbsp;
+
+The procedure described above is repeated 20 times as follows:
+
+
+```{r simulation}
+set.seed(123)
+
+CF.res <- AR.res <- numeric()
+
+# Perform the simulation 20 times
+for(k in 1:20){
+  CF.res[k] <- Iteration(CF.df)
+  AR.res[k] <- Iteration(AR.df)
+}
+
+# Calculate the mean precision
+CF.precision <- mean(CF.res)
+AR.precision <- mean(AR.res)
+```
+
+&nbsp;
+
+The results are shown in table 5.
+
+```{r precision table, echo=FALSE}
+res <- as.data.frame(cbind(CF.precision, AR.precision))
+colnames(res) <- c("Collaborative Filtering", "Association Rules")
+rownames(res) <- c("Precision")
+pander(res, caption = 'Precision Measure')
+```
+
+&nbsp;
+
+We can see that both engines had similar results.
+
+
+&nbsp;
+
+
+
+# 4. `R` Shiny App
+
+The app can be found [\underline{here}](https://amanda-magzal.shinyapps.io/recsys/).
+
+&nbsp;
+
+\underline{Preparations}
+
+&nbsp;
+
+```{r preparations, eval=FALSE}
+# Get data frame
+dat <- read.csv("lastfm-matrix-germany.csv")
+dat <- dat[, 2:ncol(dat)] %>% filter_all(any_vars(. != 0))
+
+# Get artists names - used to fill the combo box
+artists <- colnames(dat)
+
+# Get CF recommendations
+CF.df <- read.csv("CF.csv")
+
+# Get AR recommendations
+AR.df <- read.csv("AR.csv")
+```
+
+\newpage
+
+\underline{UI}
+
+Alongside some text, the UI includes a combo box to select an artist and two tables of recommendations, one for each engine used.
+
+&nbsp;
+
+```{r UI, eval=FALSE}
+ui <- fluidPage(
+  
+  theme = shinytheme('darkly'),
+  
+  tags$h1('Music Recommendation System'),
+  tags$em('Amanda Magzal'),
+  tags$hr(),
+  tags$p('This system recommends artists you might like based on the artist you select, 
+         using two different recommendation engines.'),
+  
+  tags$hr(),
+  
+  fluidRow(
+      column(4, offset = 0.5,
+             # combo box to select an artist
+             selectInput(inputId = 'artist', 
+                         label = 'Select an artist', 
+                         choices = artists),
+      )
+  ),
+  
+  tags$hr(),
+  
+  # CF algorithm
+  fluidRow(
+      column(6, offset = 0.5,
+             tags$h3('Item-Based Collaborative Filtering'),
+             tags$br(), 
+             # output table of recommended artists
+             tags$strong('Top 5 recommendations'),
+             tableOutput('CF.rec.table'))
+  ),
+  
+  tags$hr(),
+  
+  # AR algorithm
+  fluidRow(
+      column(6, offset = 0.5,
+             tags$h3('Association Rules'),
+             tags$br(), 
+             # output table of recommended artists
+             tags$strong('Top 5 recommendations'),
+             tableOutput('AR.rec.table'))
+  )
+)
+```
+
+\newpage
+
+
+\underline{Server}
+
+The server function includes the creation of the two tables by selecting the relevant recommendations for the artist selected in the combo box, from the recommendations dataframes.
+
+&nbsp;
+
+```{r server, eval=FALSE}
+server <- function(input, output) {
+
+  output$CF.rec.table <- renderTable({
+      CF.df %>% filter(X == input$artist) %>% select(Option.1:Option.5)
+  }, align = 'c', colnames = FALSE)
+  
+  output$AR.rec.table <- renderTable({
+      AR.df %>% filter(X == input$artist) %>% select(Option.1:Option.5)
+  }, align = 'c', colnames = FALSE)
+  
+}
+```
+
+
+
+
+
+
+
+
+

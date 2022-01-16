@@ -1,0 +1,605 @@
+---
+title: "Task D - Influenza Forecasting"
+subtitle: "Statistical Analysis of Big Data"
+author: "Amanda Magzal 207608647"
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+---
+
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(pander)
+library(gridExtra)
+library(grid)
+library(cluster)
+library(forecast)
+library(MLmetrics)
+
+set.seed(10)
+```
+
+\newpage
+
+# Introduction
+
+## Background
+
+Flu activity forecasting involves predicting in advance when increases in influenza (flu) activity will occur. Unlike CDC’s (Centers for Disease Control and Prevention) traditional influenza surveillance systems, which measure influenza activity after it has occurred, flu forecasting offers the possibility to look into the future and plan ahead. This is important because flu places a significant disease burden on the U.S. population each year. The potential benefits of flu forecasting are immense. When experts can accurately predict - similar to a weather forecast - when significant increases in flu activity will occur, the ability to plan ahead and more effectively implement disease mitigation strategies becomes possible. For example, disease forecasting could help determine when best to schedule vaccination clinics or educational campaigns; it could help decide the optimal time to distribute influenza antiviral medications; and it could help doctor’s offices, hospitals, businesses and schools plan for the impact of flu on daily operations.
+
+&nbsp;
+
+
+## Data
+
+Outpatient Illness Surveillance - Information on patient visits to health care providers for influenza-like illness is collected through the U.S. Outpatient Influenza-like Illness Surveillance Network (ILINet). ILINet consists of more than 2,900 outpatient healthcare providers in all 50 states, Puerto Rico, the district of Columbia and the U.S. Virgin Islands reporting over 36 million patient visits each year. Each week, approximately 2,000 outpatient healthcare providers around the country report data to CDC on the total number of patients seen and the number of those patients with influenza-like illness (ILI) by age group (0-4 years, 5-24 years, 25-49 years, 50-64 years, and over 65 years). For this system, ILI is defined as fever (temperature of 37.8 Celsius or greater) and a cough and/or a sore throat in the absence of a known cause other than influenza.
+
+The data file used in this project includes weekly reports of ILI (Influenza Like Illness) in USA for the years 1997-2016. It was downloaded from [here](https://gis.cdc.gov/grasp/fluview/fluportaldashboard.html) and is part of the CDC FluView report, which provides weekly influenza surveillance information in the United States.
+
+The variables are YEAR, WEEK, AGE 0-4, AGE 25-49, AGE 25-64, AGE 5-24, AGE 50-64, AGE 65, ILITOTAL, TOTAL PATIENTS, and ILI percent.
+
+```{r import data, echo=FALSE}
+dat <- read.csv('ILINet.csv', na.strings = c('X', '#VALUE!'))
+```
+
+&nbsp;
+
+The missing values of ILIp will be filled with the average ILIp of the corresponding week across all years. For instance, the ILIp of week 21 in 1998 will be the average ILIp of week 21 in all other years.
+
+```{r fill na, include=FALSE}
+dat <- dat %>% select(YEAR, WEEK, ILI.percent)
+
+for(i in which(is.na(dat$ILI.percent))){
+    dat$ILI.percent[i] <- mean(dat[which(dat$WEEK == dat$WEEK[i]), 
+                                   'ILI.percent'], na.rm = TRUE)
+}
+```
+
+&nbsp;
+
+
+## Main Goals
+
+We define ILI percent to be (ILITOTAL/TOTAL PATIENTS) $\times$ 100% and refer to it as ILIp. We also define ILIp season to start from week 40 of the calendar year till week 39 of the next year. For instance, season 97-98 starts from week 40 of 1997 and ends on week 39 of 1998. There are 19 seasons in total.
+
+There are two main goals:
+
+1. Clustering ILIp seasons.
+2. Forecasting ILIp 4 weeks ahead.
+
+
+\newpage
+
+
+# Clustering
+
+In this section, I attempt to find interesting clusters of the ILIp seasons.
+
+For convenience, I add two columns to the data frame:
+
+- `Season`: The number of the season out of the 19 seasons in the data. For instance, season 97-98 as defined before will be season 1.
+- `WEEK_ord`: The order of the weeks within a season. For instance, week 40 in season 97-98 will be week 1 and so on.
+
+```{r season number and week order, include=FALSE}
+starts <- which(dat$WEEK == 40)
+ends <- c(which(dat$WEEK == 39), nrow(dat))
+seas <- 1:20
+dat$Season <- unlist(mapply(function(seas, start, end)
+  {return(rep(seas, end-start+1))},
+  seas, starts, ends))
+dat$WEEK_ord <- unlist(sapply(table(dat$Season), function(x) return(1:x)))
+```
+
+
+## Seasons Curves
+
+I create a grid of all the seasons' curves to visually identify similar patterns.
+
+```{r seasons curves plot, echo=FALSE, fig.width=8, fig.height=5.5}
+curves <- function(dat){
+  g <- ggplot(dat, aes(x = WEEK_ord, y = ILI.percent)) + geom_line() +
+    labs(x = 'Week Order', y = 'ILI percent', title = 'Seasons Curves') + 
+    facet_wrap(~Season) + theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5))
+  return(g)
+}
+curves(dat)
+```
+
+
+We see that most seasons have a similar pattern: in the beginning of the season, the ILIp is around 1. It increases as the weeks go by and reaches it's highest, between 4% to 6%, depending on the season. This usually happens somewhere between week 12 to week 22 (The winter months). Then it decreases again to around 1%.
+
+There are a few interesting points worth mentioning:
+
+- Season 7 (2003-2004) had a higher ILIp than the previous years. This seems to be because the predominant flu virus was A(H3N2).
+- Season 12 (2008-2009) had a very unusual curve. This is due to the swine flu pandemic that occurred during this time.
+- Season 15 (2011-2012) had a relatively flat curve with low ILIp throughout the entire season.
+
+Note that we have only the beginning of the data for season 20, thus it will be dropped for now.
+
+```{r Seasons df, include=FALSE}
+Seasons <- dat %>% filter(Season < 20) %>% 
+  select(Season, WEEK_ord, ILI.percent) %>% 
+  pivot_wider(names_from = WEEK_ord, values_from = ILI.percent) 
+```
+
+&nbsp;
+
+
+## Identifying Clusters
+
+In order to find interesting clusters of the ILIp seasons, I use the following procedure:
+
+1. Create a matrix of distances $D$ between the ILIp curves.
+2. Get the first and second principal coordinates using **Multidimensional Scaling**.
+3. Find Clusters using the **PAM Clustering Algorithm**.
+
+First, I give a brief explanation of Multidimensional Scaling and the PAM Clustering Algorithm. Then, I apply the above procedure using two different distance measures: Euclidean and Manhattan Distance. For each measure I find $K=2,3,4,5$ clusters and compare the results.
+
+&nbsp;
+
+
+### MDS and PAM
+
+&nbsp;
+
+\underline{Multidimensional Scaling (MDS)}
+
+MDS deals with "fitting" the data in a low-dimensional space with minimal distortion to the distances between original points.
+
+The algorithm works as follows:
+
+1. For given matrix of distances $D$, compute matrix $B$ where
+$$
+b_{ij} = -\frac{1}{2} \Big( d_{ij}^2 -\frac{1}{n} \sum_{j=1}^n d_{ij}^2 -\frac{1}{n} \sum_{i=1}^n d_{ij}^2 +\frac{1}{n^2} \sum_{i=1}^n \sum_{j=1}^n d_{ij}^2 \Big)
+$$
+
+2. Perform SVD of $B$, $B = V\Lambda V^T$; let $\lambda_1 \ge \lambda_2 \ge \dots \ge \lambda_n$.
+
+3. Retain $q$ largest eigenvalues, $q \le p$, set $\Lambda_1 = \text{diag}\{\lambda_1, \dots, \lambda_n, 0, \dots, 0\}$.
+
+4. The new $q$–dimensional data matrix representation is $Y = V\Lambda_1^{1/2}$. The rows of the matrix $Y$ are called the **principal coordinates of $X$ in $q$-dimensions**.
+
+&nbsp;
+
+\underline{The PAM Clustering Algorithm}
+
+PAM stands for "partition around medoids". The algorithm is intended to find a sequence of objects called medoids that are centrally located in clusters.
+
+The goal of the algorithm is to minimize the average dissimilarity of objects to their closest selected object. Equivalently, we can minimize the sum of the dissimilarities between object and their closest selected object.
+
+The algorithm has two phases:
+
+1. **BUILD** - a collection of $k$ objects are selected for an initial set $S$.
+2. **SWAP** - the algorithm tries to improve the quality of the clustering by exchanging selected objects with unselected objects.
+
+\newpage
+
+### Finding Clusters
+
+Using the procedure explained above, I create clusters for $K=2,3,4,5$ using two different distance measures:
+
+- Euclidean Distance
+
+The euclidean distance between two points $x=(x_1, x_2, \dots, x_n)$ and $y=(y_1, y_2, \dots, y_n)$ in $n$-dimensional space is given by
+
+$$
+d(x,y) = \sqrt{\sum_{i=1}^n (x_i-y_i)^2}
+$$
+
+- Manhattan Distance
+
+The manhattan distance between two points $x=(x_1, x_2, \dots, x_n)$ and $y=(y_1, y_2, \dots, y_n)$ in $n$-dimensional space is given by
+
+$$
+d(x,y) = \sum_{i=1}^n |x_i-y_i|
+$$
+
+```{r clustering functions, include=FALSE}
+get_dist <- function(df, method){
+  return(dist(df, method = method))
+}
+
+get_clusters <- function(mat, k, n){
+  mds <- cmdscale(mat, k = k)
+  medoids <- pam(mds, n)
+  df <- as.data.frame(mds)
+  df$Cluster <- factor(medoids$clustering)
+  return(df)
+}
+
+clusters_plot <- function(mds, k){
+  p <- ggplot(mds, aes(V1, V2, col = Cluster)) + geom_point(cex = 3) +
+    labs(title = paste('K =', k), 
+         x = 'First Principal Component', y = 'Second Principal Component') + 
+    theme_bw() + theme(plot.title = element_text(hjust = 0.5)) +
+    scale_color_brewer(palette = 'Set2')
+  return(p)
+}
+```
+
+\underline{Clustering Results}
+
+&nbsp;
+
+```{r euclidean dist matrix, include=FALSE}
+Dist <- get_dist(Seasons, 'euclidean')
+```
+
+```{r euclidean with k2, include=FALSE}
+k <- 2
+mds1 <- get_clusters(Dist, 2, k)
+p1 <- clusters_plot(mds1, k)
+```
+
+```{r euclidean with k3, include=FALSE}
+k <- 3
+mds2 <- get_clusters(Dist, 2, k)
+p2 <- clusters_plot(mds2, k)
+```
+
+```{r euclidean with k4, include=FALSE}
+k <- 4
+mds3 <- get_clusters(Dist, 2, k)
+p3 <- clusters_plot(mds3, k)
+```
+
+```{r euclidean with k5, include=FALSE}
+k <- 5
+mds4 <- get_clusters(Dist, 2, k)
+p4 <- clusters_plot(mds4, k)
+```
+
+```{r eucledian grid, echo=FALSE, fig.height=12, fig.width=15}
+grid.arrange(p1, p2, p3, p4, nrow = 2, top = textGrob('Medoids Clustering using Euclidean Distance'))
+```
+
+&nbsp;
+
+```{r manhattan dist matrix, include=FALSE}
+Dist <- get_dist(Seasons, 'manhattan')
+```
+
+```{r manhattan with k2, echo=FALSE}
+k <- 2
+mds5 <- get_clusters(Dist, 2, k)
+p5 <- clusters_plot(mds5, k)
+```
+
+```{r manhattan with k3, echo=FALSE}
+k <- 3
+mds6 <- get_clusters(Dist, 2, k)
+p6 <- clusters_plot(mds6, k)
+```
+
+```{r manhattan with k4, echo=FALSE}
+k <- 4
+mds7 <- get_clusters(Dist, 2, k)
+p7 <- clusters_plot(mds7, k)
+```
+
+```{r manhattan with k5, echo=FALSE}
+k <- 5
+mds8 <- get_clusters(Dist, 2, k)
+p8 <- clusters_plot(mds8, k)
+```
+
+```{r manhattan grid, echo=FALSE, fig.height=12, fig.width=15}
+grid.arrange(p5, p6, p7, p8, nrow = 2, top = textGrob('Medoids Clustering using Manhattan Distance'))
+```
+
+&nbsp;
+
+### Comparing the Results
+
+```{r curves plot, include=FALSE}
+add_cluster <- function(dat, cluster){
+  starts <- which(dat$WEEK == 40)
+  ends <- which(dat$WEEK == 39)
+  dat$Cluster <- unlist(mapply(function(cluster, start, end)
+  {return(rep(cluster, end-start+1))},
+  cluster, starts, ends))
+  return(dat)
+}
+
+curves <- function(dat, distance){
+  g <- ggplot(dat, aes(x = WEEK_ord, y = ILI.percent)) + geom_line(aes(col = factor(Cluster))) +
+    labs(x = 'Week Order', y = 'ILI percent', 
+         title = paste('Seasons Curves by Cluster, ', distance)) + 
+    facet_wrap(~Season) + theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5), legend.position = c(0.9, 0.05)) +
+    scale_color_brewer(palette = 'Set2', name = 'Cluster')
+  return(g)
+}
+
+curves_dat <- dat %>% filter(Season < 20)
+```
+
+
+```{r results curves, include=FALSE}
+curves1 <- curves(add_cluster(curves_dat, mds1$Cluster), 'Euclidean Distance')
+curves2 <- curves(add_cluster(curves_dat, mds2$Cluster), 'Euclidean Distance')
+curves3 <- curves(add_cluster(curves_dat, mds3$Cluster), 'Euclidean Distance')
+curves4 <- curves(add_cluster(curves_dat, mds4$Cluster), 'Euclidean Distance')
+curves5 <- curves(add_cluster(curves_dat, mds5$Cluster), 'Manhattan Distance')
+curves6 <- curves(add_cluster(curves_dat, mds6$Cluster), 'Manhattan Distance')
+curves7 <- curves(add_cluster(curves_dat, mds7$Cluster), 'Manhattan Distance')
+curves8 <- curves(add_cluster(curves_dat, mds8$Cluster), 'Manhattan Distance')
+```
+
+After analyzing the results, I found that the most interesting results were obtained for $K=4$.
+
+- We see that overall, consecutive seasons tend to be clustered together. For instance, both methods assigned the first 6 seasons to the same cluster.
+- Using euclidean distance, season 7 was assigned to its own cluster. This might because it had a higher percentage at its peak, compared to other seasons.
+- Using manhattan distance, season 12 was assigned to its own cluster. This is probably due to the swine flu pandemic that occurred during that time and resulted in a very unusual curve.
+- Using manhattan distance, cluster 2 seems to include seasons where the ILIp peaked around week order 20 and had lower average percentages, while cluster 1 includes ones where it peaked around week 18 and had higher average percentages. Cluster 4, includes seasons that had their peak ILIp the earliest, around week 13.
+
+The seasons' curves colored by cluster (for $K=4$) are shown below.
+
+```{r echo=FALSE, fig.height=16, fig.width=12}
+grid.arrange(curves3, curves7, nrow = 2)
+```
+
+
+```{r eval=FALSE, include=FALSE}
+temp <- Seasons[, 2:53]
+Mean <- apply(temp, 1, mean)
+Max <- apply(temp, 1, max)
+Ind <- apply(temp, 1, which.max)
+
+df <- as.data.frame(cbind(Season = Seasons$Season, Mean, Max, Ind, Euclidean = mds3$Cluster, Manhattan = mds7$Cluster))
+df <- df[order(df$Manhattan),]
+colnames(df) <- c('Season', 'Average ILIp', 'Max ILIp', 'Peak Week', 'Euclidean Dist Cluster', 'Manhattan Dist Cluster')
+pander(df, caption = 'Clusters for K = 4')
+```
+
+
+\newpage
+
+
+# Forecasting
+
+In this section, I attempt to develop a method that forecasts ILIp 4 weeks ahead. First, I show the predictions for an entire season and then I show for only 4 weeks.
+
+## Time Series Data
+
+The train data includes the first 18 season and the rest (season 19 and part of season 20) is part of the test data.
+
+```{r train test, include=FALSE}
+train <- dat %>% filter(WEEK != 53, Season < 19) %>% select(ILI.percent)
+test <- dat %>% filter(WEEK != 53, Season > 18)
+y_test <- test$ILI.percent
+
+ts_dat <- ts(train, start = c(1997, 40), frequency = 52)
+```
+
+```{r ts plot, echo=FALSE, fig.height=4, fig.width=5, fig.align='center'}
+plot.ts(ts_dat, main = 'Time Series Data', ylim = c(0, 8))
+```
+
+&nbsp;
+
+A seasonal time series consists of the following components:
+
+- Trend: represents the gradual change in the time series data. The trend pattern depicts long-term growth or decline.
+
+- Seasonality: represents the short-term patterns that occur within a single unit of time and repeats indefinitely.
+
+- Noise (Random Behavior): represents irregular variations and is purely random. These fluctuations are unforeseen, unpredictable, and cannot be explained by the model.
+
+The estimated values of these components (using the `decmpose` function in `R`) are shown in the following plot:
+
+
+```{r decomposition plot, echo=FALSE, fig.height=4, fig.width=5, fig.align='center'}
+ddata <- decompose(ts_dat)
+plot(ddata)
+```
+
+
+We can see that the trend component shows an irregular peak around 2009 with is when the swine flu pandemic occurred.
+
+Using the `acf` function in `R` (with `lag`=104, i.e. two seasons), we can also see how the seasonality is reflected. The correlation decreases as the weeks go by and almost disappears as we reach the first quarter of the year, then increases again till it reaches a peak in the middle of the year. The pattern is repeated in the second half of the year.
+
+```{r acf, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3.5, fig.width=4.5, fig.align='center'}
+ggAcf(ts_dat, lag = 104, main = 'Time Series Data Autocorrelation')
+```
+
+
+## Forecasting Models
+
+```{r metrics functions, include=FALSE}
+HR <- function(y_pred, y_true){
+  test <- length(which(sign(y_true)==sign(y_pred))) / length(y_true)
+  return(as.numeric(test))
+}
+
+get_measures <- function(y_true, y_pred){
+  r <- cor(y_pred, y_true)
+  rmse <- RMSE(y_pred, y_true)
+  rmspe <- RMSPE(y_pred, y_true)
+  mape <- MAPE(y_pred, y_true)
+  hr <- HR(y_pred, y_true)
+  
+  return(c(r, rmse, rmspe, mape, hr))
+}
+```
+
+### Baseline Predictor
+
+For each test observation, the baseline predictor is the average of the same week over the previous years. For example, when predicting ILIp for week 34, 2012, the prediction will be the average of the ILIp values in weeks 34 of all previous years.
+
+```{r baseline predictor, include=FALSE}
+baseline_predictor <- function(year, week){
+  x <- dat %>% filter(WEEK == week, YEAR < year) %>% select(ILI.percent)
+  return(mean(x$ILI.percent))
+}
+
+y_pred <- numeric()
+
+for(i in 1:nrow(test)){
+  y_pred[i] <- baseline_predictor(test$YEAR[i], test$WEEK[i])
+}
+
+baseline_measures <- get_measures(y_test, y_pred)
+```
+
+&nbsp;
+
+
+### Holt-Winters Exponential Smoothing
+
+Holt-Winters exponential smoothing estimates the level, slope and seasonal component at the current time point. 
+
+Smoothing is controlled by three parameters: 
+
+- **alpha** - estimates the level.
+- **beta** - estimates the slope of the trend component.
+- **gamma** - estimates the seasonal component. 
+
+All the parameters have values between 0 and 1. If the values that are close to 0, it mean that relatively little weight is placed on the most recent observations when making forecasts of future values.
+
+The estimated values of the parameters are $\alpha=0.924, \beta=0, \gamma=1$. As the time series is stationary, we see that the trend parameter $\beta$ is equal to 0.
+
+```{r holt winters, echo=FALSE, fig.align='center'}
+model <- HoltWinters(ts_dat)
+
+# model
+
+prediction <- forecast(model, level = c(95), h = nrow(test))
+y_pred <- as.vector(prediction$mean)
+
+holt_measures <- get_measures(y_test, y_pred)
+
+autoplot(prediction)
+```
+
+&nbsp;
+
+
+### Autoregressive Integrated Moving Average (ARIMA)
+
+ARIMA models are classified by three factors:
+
+- **p** - Number of autoregressive terms (AR).
+- **d** - How many non-seasonal differences are needed to achieve stationarity (I).
+- **q** - Number of lagged forecast errors in the prediction equation (MA).
+
+&nbsp;
+
+I used the function `auto.arima` in `R` that uses a variation of the Hyndman-Khandakar algorithm, which combines unit root tests, minimization of the AICc, and MLE to obtain an ARIMA model.
+
+1. The number of differences $0\le d\le 2$ is determined using repeated KPSS tests.
+2. The values of $p$ and $q$ are then chosen by minimizing the AICc after differencing the data $d$ times. Rather than considering every possible combination of $p$ and $q$, the algorithm uses a stepwise search to traverse the model space.
+
+The selected parameters are $p=2, d=0, q=1$. Again, as the time series is stationary, we see that there was no need to difference.
+
+```{r arima, echo=FALSE, fig.align='center'}
+model <- auto.arima(ts_dat)
+
+# summary(model)
+
+prediction <- forecast(model, level = c(95), h = nrow(test))
+y_pred <- as.vector(prediction$mean)
+
+arima_measures <- get_measures(y_test, y_pred)
+
+autoplot(prediction)
+```
+
+\newpage
+
+## Comparison and Evaluation of the Models
+
+Let $y$ stand for the observed ILIp and $\hat{y}$ stand for the corresponding predicted values.
+
+To compare the different models, the following accuracy measures will be provided:
+
+1. **Pearson Correlation** - a measure of the linear dependence between two variables, defined as:
+$$
+r = \frac{\sum_{i=1}^n(y_i-\bar{y})(\hat{y}_i-\bar{\hat{y}})}{\sqrt{\sum_{i=1}^n(y_i-\bar{y})^2(\hat{y}_i-\bar{\hat{y}})^2}}
+$$
+
+2. **Root Mean Squared Error (RMSE)** - a measure of the difference between predicted and true values, defined as:
+$$
+\text{RMSE} = \sqrt{\frac{1}{n}\sum_{i=1}^n(y_i-\hat{y}_i)^2}
+$$
+
+3. **Root Mean Squared Percent Error (RMSPE)** - a measure of the percent difference between predicted and true values, defined as:
+$$
+\text{RMSPE} = \sqrt{\frac{1}{n}\sum_{i-1}^n \bigg(\frac{y_i-\hat{y}_i}{y_i} \bigg)^2} \cdot 100
+$$
+
+4. **Maximum Absolute Percent Error (MAPE)** - a measure of the magnitude of the maximum percent difference between predicted and true values, defined as:
+$$
+\text{MAPE} = \bigg(\max_{i=1,...,n}\frac{|y_i-\hat{y}_i|}{y_i} \bigg) \cdot 100
+$$
+
+5. **Hit Rate (HR)** - a measure of how well the algorithm predicts the direction of change in the signal (independently of the magnitude of the change), defined as:
+$$
+\text{HR} = \frac{\sum_{i=2}^n \big(\text{sign}(y_i-y_{i-1}) == \text{sign}(\hat{y}_i-\hat{y}_{i-1}) \big)}{n-1} \cdot 100
+$$
+
+where the symbol ($a == b$) denotes an if statement that returns the value 1, if a (here the sign of the observed changes) and b (here the sign of the predicted changes) are the same, and 0 otherwise.
+
+
+The following table shows the measures for each model.
+
+```{r measures table, echo=FALSE}
+measures_df <- as.data.frame(rbind(baseline_measures, holt_measures, arima_measures))
+colnames(measures_df) <- c('r', 'RMSE', 'RMSPE', 'MAPE', 'HR')
+rownames(measures_df) <- c('Baseline Predictor', 'Holt-Winters ES', 'ARIMA')
+pander(measures_df, caption = 'Accuracy Measures of the Models - Season Prediction', split.table = Inf)
+```
+
+It seems like the ARIMA model had the overall best results.
+
+I perform the same procedure to forecast 4 weeks ahead. The measures for each model are shown in the following table.
+
+```{r 4 weeks results, echo=FALSE}
+train <- dat %>% filter(WEEK != 53, Season < 20) %>% select(ILI.percent)
+test <- dat %>% filter(WEEK != 53, Season == 20)
+test <- test[1:4, ]
+y_test <- test$ILI.percent
+
+ts_dat <- ts(train, start = c(1997, 40), frequency = 52)
+
+# baseline
+y_pred <- numeric()
+
+for(i in 1:nrow(test)){
+  y_pred[i] <- baseline_predictor(test$YEAR[i], test$WEEK[i])
+}
+
+baseline_measures <- get_measures(y_test, y_pred)
+
+# holt winters
+model <- HoltWinters(ts_dat)
+
+prediction <- forecast(model, level = c(95), h = nrow(test))
+y_pred <- as.vector(prediction$mean)
+
+holt_measures <- get_measures(y_test, y_pred)
+
+# arima
+model <- auto.arima(ts_dat)
+
+prediction <- forecast(model, level = c(95), h = nrow(test))
+y_pred <- as.vector(prediction$mean)
+
+arima_measures <- get_measures(y_test, y_pred)
+
+measures_df <- as.data.frame(rbind(baseline_measures, holt_measures, arima_measures))
+colnames(measures_df) <- c('r', 'RMSE', 'RMSPE', 'MAPE', 'HR')
+rownames(measures_df) <- c('Baseline Predictor', 'Holt-Winters ES', 'ARIMA')
+pander(measures_df, caption = 'Accuracy Measures of the Models - 4 Weeks Prediction', split.table = Inf)
+```
+
+Again, it seems like ARIMA model had the overall best results.
+
+
+
+
+
